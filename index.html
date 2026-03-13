@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SGX Vision Tracker v8 | Spatialgineers</title>
+    <title>SGX Vision Tracker v9 | Spatialgineers</title>
     <script src="https://cdn.tailwindcss.com"></script>
     
     <!-- MediaPipe Dependencies (Rastreo IA) -->
@@ -165,7 +165,7 @@
     <div id="loadingScreen" class="absolute inset-0 z-50 flex flex-col items-center justify-center bg-[#111111]">
         <div class="loader mb-4"></div>
         <h1 class="text-3xl font-bold tracking-widest text-[#FDCC0D]">SGX<span class="text-white">.SYNTHESIZE</span></h1>
-        <p class="text-[#888888] mt-2">Iniciando Full Body Tracking y Espacio 3D...</p>
+        <p class="text-[#888888] mt-2">Iniciando Lásers Direccionales y Colisiones...</p>
     </div>
 
     <!-- Capa CSS para Glitch Nivel 1 -->
@@ -256,15 +256,26 @@
         <div class="border-t border-[#32527B] pt-2 mt-1">
             <h3 class="text-[#888888] text-[10px] uppercase font-bold tracking-widest mb-1">Misiones SGX</h3>
             <ul class="text-[10px] text-gray-300 list-disc pl-4 space-y-1">
-                <li>Abre la boca <span class="text-[#FDCC0D]">completamente</span> para disparar Lásers de Energía.</li>
+                <li>Abre la boca para disparar <span class="text-[#FDCC0D]">Lásers de Energía</span> hacia donde mires.</li>
                 <li>Los Modelos 3D <span class="text-[#FDCC0D]">rebotan</span> al chocar contra tu cuerpo.</li>
-                <li>Usa <span class="text-[#FDCC0D]">Pellizcos</span> para capturar los modelos 3D y sumar puntos.</li>
-                <li>Pellizca los <span class="text-[#B87333]">Orbes Espaciales</span> a los lados de la pantalla.</li>
+                <li>Usa los lásers o pellizcos para <span class="text-[#FDCC0D]">capturar</span> los assets.</li>
             </ul>
         </div>
     </div>
 
     <script>
+        // Utilidades Matemáticas para Colisiones de Láser
+        function sqr(x) { return x * x }
+        function dist2(v, w) { return sqr(v.x - w.x) + sqr(v.y - w.y) }
+        function distToSegmentSquared(p, v, w) {
+            let l2 = dist2(v, w);
+            if (l2 === 0) return dist2(p, v);
+            let t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2;
+            t = Math.max(0, Math.min(1, t));
+            return dist2(p, { x: v.x + t * (w.x - v.x), y: v.y + t * (w.y - v.y) });
+        }
+        function distToSegment(p, v, w) { return Math.sqrt(distToSegmentSquared(p, v, w)); }
+
         // Variables Gamificación
         let gameScore = 0;
         const scoreDisplay = document.getElementById('scoreDisplay');
@@ -272,12 +283,13 @@
 
         // Clase para animar los textos de puntuación
         class FloatingText {
-            constructor(text, x, y) {
+            constructor(text, x, y, color = '#FDCC0D') {
                 this.text = text;
                 this.x = x;
                 this.y = y;
                 this.life = 1.0;
                 this.vy = -3;
+                this.color = color;
             }
             update() {
                 this.y += this.vy;
@@ -285,16 +297,15 @@
             }
             draw(ctx) {
                 ctx.save();
-                // Desinvertir el texto temporalmente para que se lea correcto
                 ctx.translate(this.x, this.y);
-                ctx.scale(-1, 1);
+                ctx.scale(-1, 1); // Desinvertir el texto para que se lea correcto
                 
                 ctx.globalAlpha = Math.max(this.life, 0);
-                ctx.fillStyle = '#FDCC0D';
-                ctx.font = 'bold 30px "Courier New"';
+                ctx.fillStyle = this.color;
+                ctx.font = 'bold 32px "Courier New"';
                 ctx.textAlign = 'center';
                 ctx.shadowColor = '#B87333';
-                ctx.shadowBlur = 10;
+                ctx.shadowBlur = 15;
                 ctx.fillText(this.text, 0, 0);
                 ctx.restore();
             }
@@ -365,7 +376,7 @@
                 this.mesh.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, 0);
                 
                 this.vx = (Math.random() - 0.5) * 0.8;
-                this.vy = -(Math.random() * 0.6 + 0.3); // Gravedad nativa hacia abajo (negativa en Y)
+                this.vy = -(Math.random() * 0.6 + 0.3); // Gravedad nativa
                 this.vz = Math.random() * 1.0 + 0.5; 
                 
                 this.vrx = (Math.random() - 0.5) * 0.2;
@@ -383,7 +394,7 @@
                 this.mesh.rotation.y += this.vry;
                 this.life -= 0.012; 
                 
-                let s = this.life * 7.5; // Tamaño reducido
+                let s = this.life * 7.5; 
                 this.mesh.scale.set(s,s,s);
             }
             getScreenPosition(cam, w, h) {
@@ -504,7 +515,7 @@
                 this.rotationSpeed = (Math.random() - 0.5) * 0.2;
                 this.vx = (Math.random() - 0.5) * (isBurst ? 25 : 12); 
                 this.vy = (Math.random() - 0.5) * (isBurst ? 25 : 12);
-                this.size = Math.random() * 20 + 15; // Tamaño Grande restaurado
+                this.size = Math.random() * 20 + 15; 
                 this.decay = isBurst ? 0.05 : 0.025; 
             }
             update() {
@@ -596,45 +607,80 @@
             ctx.restore();
         }
 
-        // Lásers Super Saiyan (Boca Abierta)
+        // Lásers Dinámicos: Direccionales basados en la rotación de la cabeza
         function drawLasers(ctx, faceLandmarks, w, h) {
-            const leftTop = faceLandmarks[159];
-            const rightTop = faceLandmarks[386];
+            const leftEye = faceLandmarks[159];
+            const rightEye = faceLandmarks[386];
+            const nose = faceLandmarks[4];
             
-            const lx = leftTop.x * w;
-            const ly = leftTop.y * h;
-            const rx = rightTop.x * w;
-            const ry = rightTop.y * h;
-
+            const lx = leftEye.x * w; const ly = leftEye.y * h;
+            const rx = rightEye.x * w; const ry = rightEye.y * h;
+            const nx = nose.x * w; const ny = nose.y * h;
+            
+            // Punto medio de los ojos
+            const mx = (lx + rx) / 2;
+            const my = (ly + ry) / 2;
+            
+            // Vector de Dirección (Gaze Vector)
+            let dx = nx - mx;
+            let dy = ny - my;
+            
+            // Si mira directamente a la cámara (vector nulo), forzamos dirección hacia el usuario (abajo en la pantalla)
+            if (Math.abs(dx) < 5 && Math.abs(dy) < 5) {
+                dy = 15; 
+            }
+            
+            // Normalizar el vector
+            const mag = Math.sqrt(dx*dx + dy*dy);
+            dx /= mag; dy /= mag;
+            
+            const length = 2500; // Haz que cruce toda la pantalla
+            
+            const endL = { x: lx + dx * length, y: ly + dy * length };
+            const endR = { x: rx + dx * length, y: ry + dy * length };
+            
             ctx.save();
-            ctx.strokeStyle = '#FDCC0D';
-            ctx.lineWidth = 15;
             ctx.shadowColor = '#FDCC0D';
             ctx.shadowBlur = 30;
-            ctx.lineCap = "round";
-
-            // Haz exterior (Amarillo Neón)
-            ctx.beginPath();
-            ctx.moveTo(lx, ly);
-            ctx.lineTo(lx + (Math.random()-0.5)*30, 0); // Dispara hacia el cielo
-            ctx.stroke();
-
-            ctx.beginPath();
-            ctx.moveTo(rx, ry);
-            ctx.lineTo(rx + (Math.random()-0.5)*30, 0);
-            ctx.stroke();
-
-            // Núcleo del Láser (Blanco brillante)
-            ctx.lineWidth = 5;
-            ctx.strokeStyle = '#FFFFFF';
-            ctx.shadowBlur = 10;
-            ctx.beginPath(); ctx.moveTo(lx, ly); ctx.lineTo(lx + (Math.random()-0.5)*10, 0); ctx.stroke();
-            ctx.beginPath(); ctx.moveTo(rx, ry); ctx.lineTo(rx + (Math.random()-0.5)*10, 0); ctx.stroke();
             
+            // Dibujar Lásers con Perspectiva 3D (Polígonos que se ensanchan)
+            [ {start: {x:lx, y:ly}, end: endL}, {start: {x:rx, y:ry}, end: endR} ].forEach(laser => {
+                // Vector Perpendicular para definir el grosor del láser
+                let px = -dy; let py = dx;
+                const baseW = 4; // Ancho en el ojo
+                const endW = 60; // Ancho en el final de la pantalla (Profundidad)
+                
+                // Haz exterior (Amarillo Neón)
+                ctx.fillStyle = 'rgba(253, 204, 13, 0.8)';
+                ctx.beginPath();
+                ctx.moveTo(laser.start.x + px * baseW, laser.start.y + py * baseW);
+                ctx.lineTo(laser.end.x + px * endW, laser.end.y + py * endW);
+                ctx.lineTo(laser.end.x - px * endW, laser.end.y - py * endW);
+                ctx.lineTo(laser.start.x - px * baseW, laser.start.y - py * baseW);
+                ctx.closePath();
+                ctx.fill();
+                
+                // Núcleo Intenso (Blanco)
+                ctx.fillStyle = '#FFFFFF';
+                ctx.shadowBlur = 15;
+                ctx.beginPath();
+                ctx.moveTo(laser.start.x + px * (baseW/2), laser.start.y + py * (baseW/2));
+                ctx.lineTo(laser.end.x + px * (endW/3), laser.end.y + py * (endW/3));
+                ctx.lineTo(laser.end.x - px * (endW/3), laser.end.y - py * (endW/3));
+                ctx.lineTo(laser.start.x - px * (baseW/2), laser.start.y - py * (baseW/2));
+                ctx.closePath();
+                ctx.fill();
+            });
             ctx.restore();
+            
+            // Retorna los segmentos de línea para la lógica de colisión (Gamificación)
+            return [
+                { p1: {x: lx, y: ly}, p2: endL },
+                { p1: {x: rx, y: ry}, p2: endR }
+            ];
         }
 
-        // Dibuja los "Botones Espaciales" y corrige la Inversión de Texto
+        // Interfaz Espacial: Los textos ahora se leen correctamente gracias al translate & scale interno
         function drawSpatialInterfaces(ctx, w, h, btnColorShift, btnGravity) {
             ctx.save();
             ctx.lineWidth = 2;
@@ -647,20 +693,20 @@
                 ctx.fill();
                 ctx.stroke();
                 
-                // Ingeniería: Escalar X negativamente para contrarrestar el espejo del canvas
                 ctx.save();
-                ctx.scale(-1, 1);
+                ctx.translate(btn.x, btn.y);
+                ctx.scale(-1, 1); // Solución Matemática: Voltea el texto en su propio eje local
                 ctx.fillStyle = btn.active ? '#111' : '#FFF';
                 ctx.font = 'bold 14px "Segoe UI"';
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
-                ctx.fillText(btn.label, -btn.x, btn.y); // Aplicar coordenada negativa por la escala
+                ctx.fillText(btn.label, 0, 0); 
                 ctx.restore();
             });
             ctx.restore();
         }
 
-        // MediaPipe Initialization (Añadida detección de Pose)
+        // MediaPipe Initialization
         const holistic = new Holistic({locateFile: (file) => {
             return `https://cdn.jsdelivr.net/npm/@mediapipe/holistic/${file}`;
         }});
@@ -682,6 +728,7 @@
             let isInteracting = false;
             let mouthDist = 0;
             let mouthLoc = null;
+            let activeLasers = []; // Para registrar disparos de láser
             
             let zPushForce = 0;
 
@@ -692,15 +739,13 @@
             let baseGInt = glitchIntSlider.value / 100;
             let dynamicGInt = baseGInt;
 
-            // Extraer Colisionadores del Cuerpo (Body Tracking)
             let bodyColliders = [];
             if (results.poseLandmarks) {
-                // Índices clave: Hombros, codos, muñecas y caderas
                 const poseIndices = [11, 12, 13, 14, 15, 16, 23, 24]; 
                 poseIndices.forEach(i => {
                     const lm = results.poseLandmarks[i];
                     if (lm && lm.visibility > 0.5) {
-                        bodyColliders.push({x: lm.x * w, y: lm.y * h, radius: 45}); // Radio de colisión
+                        bodyColliders.push({x: lm.x * w, y: lm.y * h, radius: 45}); 
                     }
                 });
             }
@@ -743,7 +788,6 @@
             bufferCtx.drawImage(results.image, 0, 0, w, h);
             bufferCtx.filter = 'none'; 
             
-            // Dibujar Mallas Opcionales
             if (results.poseLandmarks && togglePose.checked) {
                 drawConnectors(bufferCtx, results.poseLandmarks, POSE_CONNECTIONS, {color: 'rgba(136, 136, 136, 0.4)', lineWidth: 2});
             }
@@ -755,13 +799,12 @@
                 }
                 drawNeonEyes(bufferCtx, results.faceLandmarks, w, h);
 
-                // Disparo de Lásers Oculares al abrir la boca dramáticamente
+                // Disparo de Lásers Oculares direccionales
                 if (mouthDist > 0.055) {
                     isInteracting = true;
-                    drawLasers(bufferCtx, results.faceLandmarks, w, h);
+                    activeLasers = drawLasers(bufferCtx, results.faceLandmarks, w, h);
                 }
 
-                // Emisión de Lluvia 3D
                 if (Math.random() > 0.95) { 
                     const mx = Math.random(); 
                     const my = -0.1; 
@@ -794,7 +837,6 @@
                         pinches.forEach(p => {
                             globalPinches.push(p);
 
-                            // Interfaz Espacial
                             const d1 = Math.hypot(p.x - btnColorShift.x, p.y - btnColorShift.y);
                             const d2 = Math.hypot(p.x - btnGravity.x, p.y - btnGravity.y);
                             
@@ -818,7 +860,7 @@
                 }
             });
 
-            // FÍSICAS Y GAMIFICACIÓN: Comprobar colisiones 3D
+            // FÍSICAS Y GAMIFICACIÓN AVANZADA
             for (let i = glbParticles.length - 1; i >= 0; i--) {
                 let p3d = glbParticles[i];
                 p3d.update(isGravityReversed, zPushForce);
@@ -826,15 +868,15 @@
                 let screenPos = p3d.getScreenPosition(camera, w, h);
                 let caught = false;
                 let bounced = false;
+                let isLaserKill = false;
 
                 if (screenPos) {
                     // Colisiones del Cuerpo (Rebote Físico)
-                    if (p3d.vy < 0) { // Solo si están cayendo
+                    if (p3d.vy < 0) { 
                         for (let bc of bodyColliders) {
                             if (Math.hypot(screenPos.x - bc.x, screenPos.y - bc.y) < bc.radius) {
-                                // Rebote hacia arriba (Inversión de gravedad)
                                 p3d.vy = Math.abs(p3d.vy) * 1.5; 
-                                p3d.vx = (Math.random() - 0.5) * 1.5; // Desvío lateral
+                                p3d.vx = (Math.random() - 0.5) * 1.5; 
                                 bounced = true;
                                 break;
                             }
@@ -845,6 +887,7 @@
                     if (!bounced && mouthLoc && Math.hypot(screenPos.x - mouthLoc.x, screenPos.y - mouthLoc.y) < 90) {
                         caught = true;
                     }
+                    
                     // Colisión Manos Pellizcos (Captura)
                     if (!bounced && !caught) {
                         for (let pinch of globalPinches) {
@@ -853,18 +896,34 @@
                             }
                         }
                     }
+
+                    // NUEVO: Colisión de Lásers Oculares (Captura a Larga Distancia)
+                    if (!bounced && !caught && activeLasers.length > 0) {
+                        for (let laser of activeLasers) {
+                            // El láser se hace más ancho al final, pero 60px es un buen radio de captura global
+                            if (distToSegment(screenPos, laser.p1, laser.p2) < 60) {
+                                caught = true;
+                                isLaserKill = true;
+                                break;
+                            }
+                        }
+                    }
                 }
 
                 if (bounced) {
-                    // Chispas de rebote físico
                     for(let j=0; j<3; j++) particles.push(new Particle2D(screenPos.x, screenPos.y, '#B87333', null, true));
                 }
 
                 if (caught) {
-                    gameScore += 100;
+                    // Bonus de puntos si el asset es destruido con los lásers
+                    const pointsGained = isLaserKill ? 200 : 100;
+                    gameScore += pointsGained;
                     scoreDisplay.innerText = `SCORE: ${gameScore}`;
-                    floatingTexts.push(new FloatingText("+100", screenPos.x, screenPos.y));
-                    for(let j=0; j<6; j++) particles.push(new Particle2D(screenPos.x, screenPos.y, '#FDCC0D', null, true));
+                    
+                    floatingTexts.push(new FloatingText(`+${pointsGained}${isLaserKill ? ' LASER!' : ''}`, screenPos.x, screenPos.y, isLaserKill ? '#FFFFFF' : '#FDCC0D'));
+                    
+                    for(let j=0; j<6; j++) particles.push(new Particle2D(screenPos.x, screenPos.y, isLaserKill ? '#FFFFFF' : '#FDCC0D', null, true));
+                    
                     p3d.destroy();
                     glbParticles.splice(i, 1);
                     continue;
