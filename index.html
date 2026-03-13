@@ -1,0 +1,943 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SGX Vision Tracker v8 | Spatialgineers</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- MediaPipe Dependencies (Rastreo IA) -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/holistic/holistic.js" crossorigin="anonymous"></script>
+
+    <!-- Three.js Dependencies (Renderizado 3D) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+
+    <style>
+        /* SGX Brand Colors & Theme */
+        :root {
+            --sgx-blue: #32527B;
+            --sgx-yellow: #FDCC0D;
+            --sgx-copper: #B87333;
+            --sgx-dark: #111111;
+        }
+        body {
+            background-color: var(--sgx-dark);
+            color: white;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            margin: 0;
+            padding: 0;
+        }
+        
+        #videoElement { display: none; }
+
+        /* Contenedores para capas de renderizado */
+        #canvasContainer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            transform: scaleX(-1); /* Efecto espejo */
+            z-index: 1;
+            transition: filter 0.3s ease;
+        }
+
+        #outputCanvas {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        /* Marcador de Puntuación (Gamificación) */
+        #scoreDisplay {
+            position: absolute;
+            top: 20px;
+            right: 30px;
+            font-size: 2.5rem;
+            font-weight: 900;
+            color: var(--sgx-yellow);
+            text-shadow: 0 0 15px var(--sgx-yellow), 0 0 30px rgba(253, 204, 13, 0.5);
+            z-index: 20;
+            font-family: 'Courier New', Courier, monospace;
+            letter-spacing: 2px;
+        }
+
+        /* Panel de Control UI Scrollable */
+        .glass-panel {
+            background: rgba(17, 17, 17, 0.75);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(50, 82, 123, 0.6);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.7);
+            z-index: 10;
+            transition: opacity 0.4s ease, transform 0.4s ease;
+            max-height: 85vh;
+            overflow-y: auto;
+        }
+        
+        .glass-panel::-webkit-scrollbar { width: 4px; }
+        .glass-panel::-webkit-scrollbar-thumb { background: rgba(50, 82, 123, 0.8); border-radius: 4px; }
+        
+        .ui-hidden {
+            opacity: 0;
+            transform: translateX(-120%);
+            pointer-events: none;
+        }
+
+        /* Glitch Nivel 1 (VHS Scanlines) */
+        .glitch-scanlines {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: repeating-linear-gradient(
+                0deg,
+                rgba(0, 0, 0, 0.15),
+                rgba(0, 0, 0, 0.15) 2px,
+                transparent 2px,
+                transparent 4px
+            );
+            pointer-events: none;
+            z-index: 5;
+            animation: scroll 10s linear infinite;
+        }
+        @keyframes scroll { 0% { background-position: 0 0; } 100% { background-position: 0 100%; } }
+
+        /* Custom Sliders */
+        input[type=range] {
+            -webkit-appearance: none;
+            width: 100%;
+            background: transparent;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 14px;
+            width: 14px;
+            border-radius: 50%;
+            background: var(--sgx-yellow);
+            cursor: pointer;
+            margin-top: -5px;
+            box-shadow: 0 0 8px var(--sgx-yellow);
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 4px;
+            cursor: pointer;
+            background: var(--sgx-blue);
+            border-radius: 2px;
+        }
+        
+        #glitchIntSlider::-webkit-slider-thumb {
+            background: #B87333;
+            box-shadow: 0 0 8px #B87333;
+        }
+
+        .loader {
+            border: 4px solid rgba(253, 204, 13, 0.2);
+            border-left-color: var(--sgx-yellow);
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+    <!-- Filtro SVG para Efecto Líquido -->
+    <svg style="display: none;">
+        <defs>
+            <filter id="liquid-effect">
+                <feTurbulence id="turbulence" type="fractalNoise" baseFrequency="0.015" numOctaves="2" result="noise" />
+                <feDisplacementMap in="SourceGraphic" in2="noise" scale="25" xChannelSelector="R" yChannelSelector="G" />
+            </filter>
+        </defs>
+    </svg>
+
+    <!-- Pantalla de Carga -->
+    <div id="loadingScreen" class="absolute inset-0 z-50 flex flex-col items-center justify-center bg-[#111111]">
+        <div class="loader mb-4"></div>
+        <h1 class="text-3xl font-bold tracking-widest text-[#FDCC0D]">SGX<span class="text-white">.SYNTHESIZE</span></h1>
+        <p class="text-[#888888] mt-2">Iniciando Full Body Tracking y Espacio 3D...</p>
+    </div>
+
+    <!-- Capa CSS para Glitch Nivel 1 -->
+    <div id="glitchLayer" class="hidden"></div>
+
+    <!-- Puntuación (Gamificación) -->
+    <div id="scoreDisplay">SCORE: 0</div>
+
+    <!-- Botón Flotante para Ocultar/Mostrar Menú -->
+    <button id="floatingMenuBtn" class="absolute bottom-6 left-6 z-20 glass-panel px-6 py-3 rounded-full text-xs font-bold tracking-widest text-[#FDCC0D] uppercase hover:bg-[#FDCC0D] hover:text-black transition-colors cursor-pointer border border-[#FDCC0D] shadow-[0_0_15px_rgba(253,204,13,0.3)]">
+        Ocultar Menú
+    </button>
+
+    <!-- Video & Canvas Container -->
+    <video id="videoElement" autoplay playsinline></video>
+    <div id="canvasContainer">
+        <!-- Main visible canvas -->
+        <canvas id="outputCanvas"></canvas>
+    </div>
+
+    <!-- Panel de Control UI -->
+    <div id="controlPanel" class="absolute top-4 left-4 w-64 glass-panel rounded-lg p-4 flex flex-col gap-3 text-xs">
+        <div class="flex justify-between items-center border-b border-[#32527B] pb-2">
+            <h2 class="text-base font-bold tracking-wider text-[#FDCC0D]">SGX VISION</h2>
+            <span class="text-[10px] px-1.5 py-0.5 bg-[#32527B] rounded text-white font-mono">EN VIVO</span>
+        </div>
+
+        <div class="flex flex-col gap-1.5">
+            <label class="flex items-center justify-between cursor-pointer">
+                <span class="text-gray-200">Ver Malla Facial</span>
+                <input type="checkbox" id="toggleFace" checked class="w-3.5 h-3.5 accent-[#FDCC0D]">
+            </label>
+            <label class="flex items-center justify-between cursor-pointer">
+                <span class="text-gray-200">Ver Líneas de Manos</span>
+                <input type="checkbox" id="toggleHands" checked class="w-3.5 h-3.5 accent-[#FDCC0D]">
+            </label>
+            <label class="flex items-center justify-between cursor-pointer">
+                <span class="text-gray-200">Ver Malla Corporal</span>
+                <input type="checkbox" id="togglePose" checked class="w-3.5 h-3.5 accent-[#FDCC0D]">
+            </label>
+            <div class="flex justify-between items-center text-[#FDCC0D] font-bold mt-1 text-[10px] uppercase tracking-wide">
+                <span>Interacción Activa</span>
+                <div class="w-2.5 h-2.5 rounded-full bg-red-500 shadow-[0_0_6px_red]" id="interactIndicator"></div>
+            </div>
+        </div>
+
+        <div class="border-t border-[#32527B] pt-2 mt-1 flex flex-col gap-2">
+            <h3 class="text-[#888888] text-[10px] uppercase font-bold tracking-widest">Dirección de Arte</h3>
+            
+            <div>
+                <div class="flex justify-between mb-1 text-[10px]"><span>Matiz (Color)</span><span id="hueVal">0°</span></div>
+                <input type="range" id="hueSlider" min="0" max="360" value="0">
+            </div>
+            <div>
+                <div class="flex justify-between mb-1 text-[10px]"><span>Saturación Neón</span><span id="satVal">100%</span></div>
+                <input type="range" id="satSlider" min="0" max="300" value="100">
+            </div>
+            <div>
+                <div class="flex justify-between mb-1 text-[10px]"><span>Brillo</span><span id="brightVal">100%</span></div>
+                <input type="range" id="brightSlider" min="50" max="200" value="100">
+            </div>
+            <div>
+                <div class="flex justify-between mb-1 text-[10px]"><span>Contraste</span><span id="contVal">100%</span></div>
+                <input type="range" id="contSlider" min="50" max="200" value="100">
+            </div>
+
+            <div class="grid grid-cols-2 gap-1.5 mt-2">
+                <button id="btnInvert" class="bg-[#32527B] hover:bg-opacity-80 text-white py-1.5 rounded transition-colors text-[10px] font-bold uppercase">
+                    Invertir
+                </button>
+                <button id="btnLiquid" class="bg-[#32527B] hover:bg-opacity-80 text-white py-1.5 rounded transition-colors text-[10px] font-bold uppercase">
+                    Líquido
+                </button>
+                <button id="btnGlitch" class="col-span-2 bg-[#B87333] hover:bg-[#FDCC0D] hover:text-black text-white py-2 rounded transition-colors text-[10px] font-bold uppercase shadow-lg">
+                    Glitch: APAGADO
+                </button>
+            </div>
+            
+            <div id="glitchControlWrapper" class="hidden flex-col gap-1 mt-1 transition-opacity">
+                <div class="flex justify-between mb-1 text-[10px] text-[#FDCC0D] font-bold">
+                    <span>Intensidad Glitch Base</span>
+                    <span id="glitchIntVal">50%</span>
+                </div>
+                <input type="range" id="glitchIntSlider" min="5" max="100" value="50">
+            </div>
+        </div>
+
+        <div class="border-t border-[#32527B] pt-2 mt-1">
+            <h3 class="text-[#888888] text-[10px] uppercase font-bold tracking-widest mb-1">Misiones SGX</h3>
+            <ul class="text-[10px] text-gray-300 list-disc pl-4 space-y-1">
+                <li>Abre la boca <span class="text-[#FDCC0D]">completamente</span> para disparar Lásers de Energía.</li>
+                <li>Los Modelos 3D <span class="text-[#FDCC0D]">rebotan</span> al chocar contra tu cuerpo.</li>
+                <li>Usa <span class="text-[#FDCC0D]">Pellizcos</span> para capturar los modelos 3D y sumar puntos.</li>
+                <li>Pellizca los <span class="text-[#B87333]">Orbes Espaciales</span> a los lados de la pantalla.</li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        // Variables Gamificación
+        let gameScore = 0;
+        const scoreDisplay = document.getElementById('scoreDisplay');
+        let floatingTexts = [];
+
+        // Clase para animar los textos de puntuación
+        class FloatingText {
+            constructor(text, x, y) {
+                this.text = text;
+                this.x = x;
+                this.y = y;
+                this.life = 1.0;
+                this.vy = -3;
+            }
+            update() {
+                this.y += this.vy;
+                this.life -= 0.02;
+            }
+            draw(ctx) {
+                ctx.save();
+                // Desinvertir el texto temporalmente para que se lea correcto
+                ctx.translate(this.x, this.y);
+                ctx.scale(-1, 1);
+                
+                ctx.globalAlpha = Math.max(this.life, 0);
+                ctx.fillStyle = '#FDCC0D';
+                ctx.font = 'bold 30px "Courier New"';
+                ctx.textAlign = 'center';
+                ctx.shadowColor = '#B87333';
+                ctx.shadowBlur = 10;
+                ctx.fillText(this.text, 0, 0);
+                ctx.restore();
+            }
+        }
+
+        // Assets 2D de SGX
+        const ASSETS = { gear: new Image(), lightning: new Image() };
+        ASSETS.gear.crossOrigin = "Anonymous";
+        ASSETS.gear.src = "https://static.wixstatic.com/media/fe81a7_491c9b259c94478db32a5eeb98ef0b88~mv2.png";
+        ASSETS.lightning.crossOrigin = "Anonymous";
+        ASSETS.lightning.src = "https://static.wixstatic.com/media/fe81a7_2a1be47e660b4e0e96845a987afee9dc~mv2.png";
+
+        // Tinting Dinámico para Canvas
+        const tintedCache = {};
+        function getTintedImage(img, colorHex) {
+            if (!img.complete || img.naturalWidth === 0) return img;
+            const key = img.src + colorHex;
+            if (tintedCache[key]) return tintedCache[key];
+            const c = document.createElement('canvas');
+            c.width = img.naturalWidth; c.height = img.naturalHeight;
+            const ctx = c.getContext('2d');
+            try {
+                ctx.drawImage(img, 0, 0, c.width, c.height);
+                ctx.globalCompositeOperation = 'source-atop';
+                ctx.fillStyle = colorHex;
+                ctx.fillRect(0, 0, c.width, c.height);
+                tintedCache[key] = c;
+                return c;
+            } catch (e) { return img; }
+        }
+
+        // Configuración Three.js (Motor 3D Nativo)
+        const webglCanvas = document.createElement('canvas');
+        const renderer = new THREE.WebGLRenderer({ canvas: webglCanvas, alpha: true, antialias: true });
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 1000);
+        camera.position.z = 100;
+
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
+        dirLight.position.set(10, 20, 30);
+        scene.add(dirLight);
+
+        // Carga del modelo GLB
+        let baseGlbModel = null;
+        const loader = new THREE.GLTFLoader();
+        loader.load('https://static.wixstatic.com/3d/fe81a7_1f70d5393a404416bd9c6ce0e17291c2.glb', (gltf) => {
+            baseGlbModel = gltf.scene;
+            baseGlbModel.scale.set(10, 10, 10);
+        }, undefined, (error) => console.error('Error GLB:', error));
+
+        // Sistema de Partículas 3D
+        let glbParticles = [];
+        class GlbParticle {
+            constructor(nx, ny) {
+                if (!baseGlbModel) return;
+                this.mesh = baseGlbModel.clone();
+                
+                let vFov = camera.fov * Math.PI / 180;
+                let h = 2 * Math.tan(vFov / 2) * camera.position.z;
+                let w = h * camera.aspect;
+                
+                this.mesh.position.x = (nx - 0.5) * w;
+                this.mesh.position.y = -(ny - 0.5) * h; 
+                this.mesh.position.z = 0; 
+                
+                this.mesh.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, 0);
+                
+                this.vx = (Math.random() - 0.5) * 0.8;
+                this.vy = -(Math.random() * 0.6 + 0.3); // Gravedad nativa hacia abajo (negativa en Y)
+                this.vz = Math.random() * 1.0 + 0.5; 
+                
+                this.vrx = (Math.random() - 0.5) * 0.2;
+                this.vry = (Math.random() - 0.5) * 0.2;
+                
+                this.life = 1.0;
+                scene.add(this.mesh);
+            }
+            update(reverseGravity, zForce) {
+                if(!this.mesh) return;
+                this.mesh.position.x += this.vx;
+                this.mesh.position.y += reverseGravity ? Math.abs(this.vy) * 1.5 : this.vy;
+                this.mesh.position.z += this.vz + (zForce * 30); 
+                this.mesh.rotation.x += this.vrx;
+                this.mesh.rotation.y += this.vry;
+                this.life -= 0.012; 
+                
+                let s = this.life * 7.5; // Tamaño reducido
+                this.mesh.scale.set(s,s,s);
+            }
+            getScreenPosition(cam, w, h) {
+                if (!this.mesh) return null;
+                let vector = this.mesh.position.clone();
+                vector.project(cam);
+                return {
+                    x: (vector.x + 1) / 2 * w,
+                    y: -(vector.y - 1) / 2 * h
+                };
+            }
+            destroy() {
+                if(this.mesh) scene.remove(this.mesh);
+            }
+        }
+
+        // Setup DOM Canvas 2D
+        const videoElement = document.getElementById('videoElement');
+        const canvasElement = document.getElementById('outputCanvas');
+        const canvasCtx = canvasElement.getContext('2d', { willReadFrequently: true });
+        const bufferCanvas = document.createElement('canvas');
+        const bufferCtx = bufferCanvas.getContext('2d', { willReadFrequently: true });
+
+        const loadingScreen = document.getElementById('loadingScreen');
+        const controlPanel = document.getElementById('controlPanel');
+        const floatingMenuBtn = document.getElementById('floatingMenuBtn');
+        const interactIndicator = document.getElementById('interactIndicator');
+        const btnGlitch = document.getElementById('btnGlitch');
+        const glitchLayer = document.getElementById('glitchLayer');
+        const turbulence = document.getElementById('turbulence');
+        const glitchIntSlider = document.getElementById('glitchIntSlider');
+        const togglePose = document.getElementById('togglePose');
+
+        let isInverted = false;
+        let isLiquid = false;
+        let glitchMode = 0; 
+        const glitchNames = ["APAGADO", "VHS SCANLINES", "DIVISIÓN RGB", "ROTURA SEVERA"];
+        let particles = [];
+        let liquidPhase = 0; 
+        let isGravityReversed = false;
+
+        function resizeCanvas() {
+            canvasElement.width = window.innerWidth;
+            canvasElement.height = window.innerHeight;
+            bufferCanvas.width = window.innerWidth;
+            bufferCanvas.height = window.innerHeight;
+            
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        let isUiVisible = true;
+        floatingMenuBtn.addEventListener('click', () => {
+            isUiVisible = !isUiVisible;
+            if (isUiVisible) {
+                controlPanel.classList.remove('ui-hidden');
+                floatingMenuBtn.innerText = "Ocultar MENÚ";
+                floatingMenuBtn.style.backgroundColor = "transparent";
+                floatingMenuBtn.style.color = "#FDCC0D";
+            } else {
+                controlPanel.classList.add('ui-hidden');
+                floatingMenuBtn.innerText = "Mostrar MENÚ";
+                floatingMenuBtn.style.backgroundColor = "rgba(50, 82, 123, 0.8)";
+                floatingMenuBtn.style.color = "#FFF";
+            }
+        });
+
+        ['hue', 'sat', 'bright', 'cont'].forEach(id => {
+            document.getElementById(`${id}Slider`).addEventListener('input', (e) => {
+                document.getElementById(`${id}Val`).innerText = `${e.target.value}${id==='hue'?'°':'%'}`;
+            });
+        });
+        
+        glitchIntSlider.addEventListener('input', (e) => {
+            document.getElementById('glitchIntVal').innerText = `${e.target.value}%`;
+        });
+
+        document.getElementById('btnInvert').addEventListener('click', (e) => {
+            isInverted = !isInverted;
+            e.target.style.backgroundColor = isInverted ? '#FDCC0D' : '#32527B';
+            e.target.style.color = isInverted ? '#111' : '#FFF';
+        });
+
+        document.getElementById('btnLiquid').addEventListener('click', (e) => {
+            isLiquid = !isLiquid;
+            e.target.style.backgroundColor = isLiquid ? '#FDCC0D' : '#32527B';
+            e.target.style.color = isLiquid ? '#111' : '#FFF';
+            document.getElementById('canvasContainer').style.filter = isLiquid ? 'url(#liquid-effect)' : 'none';
+        });
+
+        btnGlitch.addEventListener('click', () => {
+            glitchMode = (glitchMode + 1) % 4;
+            btnGlitch.innerText = `Glitch: ${glitchNames[glitchMode]}`;
+            
+            if (glitchMode === 0) {
+                glitchLayer.className = 'hidden';
+                btnGlitch.style.backgroundColor = '#B87333';
+                btnGlitch.style.color = '#FFF';
+                document.getElementById('glitchControlWrapper').style.display = 'none';
+            } else {
+                glitchLayer.className = (glitchMode === 1) ? 'glitch-scanlines' : 'hidden';
+                btnGlitch.style.backgroundColor = '#FDCC0D';
+                btnGlitch.style.color = '#111';
+                document.getElementById('glitchControlWrapper').style.display = 'flex';
+            }
+        });
+
+        class Particle2D {
+            constructor(x, y, color, shapeImg, isBurst = false) {
+                this.x = x; this.y = y;
+                this.life = 1.0;
+                this.color = color;
+                this.shapeImg = shapeImg;
+                this.rotation = Math.random() * Math.PI * 2;
+                this.rotationSpeed = (Math.random() - 0.5) * 0.2;
+                this.vx = (Math.random() - 0.5) * (isBurst ? 25 : 12); 
+                this.vy = (Math.random() - 0.5) * (isBurst ? 25 : 12);
+                this.size = Math.random() * 20 + 15; // Tamaño Grande restaurado
+                this.decay = isBurst ? 0.05 : 0.025; 
+            }
+            update() {
+                this.x += this.vx; this.y += this.vy;
+                this.life -= this.decay;
+                this.rotation += this.rotationSpeed;
+            }
+            draw(ctx) {
+                ctx.save();
+                ctx.globalAlpha = Math.max(this.life, 0);
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.rotation);
+                if (this.shapeImg) {
+                    const tinted = getTintedImage(this.shapeImg, this.color);
+                    ctx.drawImage(tinted, -this.size/2, -this.size/2, this.size, this.size);
+                } else {
+                    ctx.fillStyle = this.color;
+                    ctx.beginPath(); ctx.arc(0,0, this.size/2, 0, Math.PI*2); ctx.fill();
+                }
+                ctx.restore();
+            }
+        }
+
+        function detectPinches(landmarks, w, h, handAsset) {
+            if (!landmarks) return [];
+            const thumb = landmarks[4];
+            const fingers = [
+                {id: 8, color: '#32527B'},  
+                {id: 12, color: '#FDCC0D'}, 
+                {id: 16, color: '#B87333'}, 
+                {id: 20, color: '#888888'}  
+            ];
+            
+            let activePinches = [];
+            fingers.forEach(f => {
+                const finger = landmarks[f.id];
+                const dist = Math.sqrt(Math.pow(thumb.x - finger.x, 2) + Math.pow(thumb.y - finger.y, 2));
+                if (dist < 0.05) {
+                    activePinches.push({ x: finger.x * w, y: finger.y * h, color: f.color, isThumb: false, asset: handAsset });
+                    activePinches.push({ x: thumb.x * w, y: thumb.y * h, color: '#FFFFFF', isThumb: true, asset: handAsset }); 
+                }
+            });
+            return activePinches;
+        }
+
+        function drawNeonEyes(ctx, faceLandmarks, w, h) {
+            const leftTop = faceLandmarks[159], leftBottom = faceLandmarks[145]; 
+            const rightTop = faceLandmarks[386], rightBottom = faceLandmarks[374]; 
+            
+            const leftDist = Math.abs(leftTop.y - leftBottom.y);
+            const rightDist = Math.abs(rightTop.y - rightBottom.y);
+            
+            ctx.save();
+            ctx.shadowColor = '#FDCC0D';
+            ctx.shadowBlur = 15;
+            
+            drawConnectors(ctx, faceLandmarks, FACEMESH_LEFT_EYE, {color: '#FDCC0D', lineWidth: 2});
+            drawConnectors(ctx, faceLandmarks, FACEMESH_RIGHT_EYE, {color: '#FDCC0D', lineWidth: 2});
+
+            ctx.fillStyle = 'rgba(253, 204, 13, 0.4)';
+            if (leftDist > 0.01) { 
+                const cx = ((leftTop.x + leftBottom.x) / 2) * w;
+                const cy = ((leftTop.y + leftBottom.y) / 2) * h;
+                ctx.beginPath(); ctx.arc(cx, cy, leftDist * h * 0.8, 0, 2*Math.PI); ctx.fill();
+            }
+            if (rightDist > 0.01) { 
+                const cx = ((rightTop.x + rightBottom.x) / 2) * w;
+                const cy = ((rightTop.y + rightBottom.y) / 2) * h;
+                ctx.beginPath(); ctx.arc(cx, cy, rightDist * h * 0.8, 0, 2*Math.PI); ctx.fill();
+            }
+            ctx.restore();
+
+            ctx.save();
+            const threshold = 0.018; 
+            if (leftDist > threshold) { 
+                const cx = ((leftTop.x + leftBottom.x) / 2) * w;
+                const cy = ((leftTop.y + leftBottom.y) / 2) * h;
+                const size = (leftDist * h) * 6 + 15; 
+                const tintedGear = getTintedImage(ASSETS.gear, '#32527B'); 
+                ctx.drawImage(tintedGear, cx - size/2, cy - size/2, size, size);
+            }
+            if (rightDist > threshold) { 
+                const cx = ((rightTop.x + rightBottom.x) / 2) * w;
+                const cy = ((rightTop.y + rightBottom.y) / 2) * h;
+                const size = (rightDist * h) * 6 + 15; 
+                const tintedLight = getTintedImage(ASSETS.lightning, '#FDCC0D'); 
+                ctx.drawImage(tintedLight, cx - size/2, cy - size/2, size, size);
+            }
+            ctx.restore();
+        }
+
+        // Lásers Super Saiyan (Boca Abierta)
+        function drawLasers(ctx, faceLandmarks, w, h) {
+            const leftTop = faceLandmarks[159];
+            const rightTop = faceLandmarks[386];
+            
+            const lx = leftTop.x * w;
+            const ly = leftTop.y * h;
+            const rx = rightTop.x * w;
+            const ry = rightTop.y * h;
+
+            ctx.save();
+            ctx.strokeStyle = '#FDCC0D';
+            ctx.lineWidth = 15;
+            ctx.shadowColor = '#FDCC0D';
+            ctx.shadowBlur = 30;
+            ctx.lineCap = "round";
+
+            // Haz exterior (Amarillo Neón)
+            ctx.beginPath();
+            ctx.moveTo(lx, ly);
+            ctx.lineTo(lx + (Math.random()-0.5)*30, 0); // Dispara hacia el cielo
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.moveTo(rx, ry);
+            ctx.lineTo(rx + (Math.random()-0.5)*30, 0);
+            ctx.stroke();
+
+            // Núcleo del Láser (Blanco brillante)
+            ctx.lineWidth = 5;
+            ctx.strokeStyle = '#FFFFFF';
+            ctx.shadowBlur = 10;
+            ctx.beginPath(); ctx.moveTo(lx, ly); ctx.lineTo(lx + (Math.random()-0.5)*10, 0); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(rx, ry); ctx.lineTo(rx + (Math.random()-0.5)*10, 0); ctx.stroke();
+            
+            ctx.restore();
+        }
+
+        // Dibuja los "Botones Espaciales" y corrige la Inversión de Texto
+        function drawSpatialInterfaces(ctx, w, h, btnColorShift, btnGravity) {
+            ctx.save();
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = '#FDCC0D';
+            
+            [btnColorShift, btnGravity].forEach(btn => {
+                ctx.fillStyle = btn.active ? 'rgba(253, 204, 13, 0.8)' : 'rgba(50, 82, 123, 0.4)';
+                ctx.beginPath();
+                ctx.arc(btn.x, btn.y, btn.radius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+                
+                // Ingeniería: Escalar X negativamente para contrarrestar el espejo del canvas
+                ctx.save();
+                ctx.scale(-1, 1);
+                ctx.fillStyle = btn.active ? '#111' : '#FFF';
+                ctx.font = 'bold 14px "Segoe UI"';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(btn.label, -btn.x, btn.y); // Aplicar coordenada negativa por la escala
+                ctx.restore();
+            });
+            ctx.restore();
+        }
+
+        // MediaPipe Initialization (Añadida detección de Pose)
+        const holistic = new Holistic({locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/holistic/${file}`;
+        }});
+        holistic.setOptions({ 
+            modelComplexity: 1, 
+            smoothLandmarks: true, 
+            refineFaceLandmarks: true, 
+            enableSegmentation: false,
+            minDetectionConfidence: 0.5, 
+            minTrackingConfidence: 0.5 
+        });
+
+        // Frame Logic
+        holistic.onResults((results) => {
+            if(loadingScreen.style.display !== 'none') loadingScreen.style.display = 'none';
+
+            const w = canvasElement.width;
+            const h = canvasElement.height;
+            let isInteracting = false;
+            let mouthDist = 0;
+            let mouthLoc = null;
+            
+            let zPushForce = 0;
+
+            const btnColorShift = { x: w - 120, y: h / 2 - 80, radius: 50, label: 'COLOR SHIFT', active: false };
+            const btnGravity = { x: w - 120, y: h / 2 + 80, radius: 50, label: 'GRAVITY', active: false };
+            isGravityReversed = false; 
+
+            let baseGInt = glitchIntSlider.value / 100;
+            let dynamicGInt = baseGInt;
+
+            // Extraer Colisionadores del Cuerpo (Body Tracking)
+            let bodyColliders = [];
+            if (results.poseLandmarks) {
+                // Índices clave: Hombros, codos, muñecas y caderas
+                const poseIndices = [11, 12, 13, 14, 15, 16, 23, 24]; 
+                poseIndices.forEach(i => {
+                    const lm = results.poseLandmarks[i];
+                    if (lm && lm.visibility > 0.5) {
+                        bodyColliders.push({x: lm.x * w, y: lm.y * h, radius: 45}); // Radio de colisión
+                    }
+                });
+            }
+
+            if (results.faceLandmarks) {
+                const upperLip = results.faceLandmarks[13];
+                const lowerLip = results.faceLandmarks[14];
+                mouthDist = Math.abs(upperLip.y - lowerLip.y);
+                
+                if (mouthDist > 0.035) {
+                    mouthLoc = { x: ((upperLip.x + lowerLip.x)/2) * w, y: ((upperLip.y + lowerLip.y)/2) * h };
+                }
+
+                if (mouthDist > 0.02 && glitchMode !== 0) {
+                    let mouthFactor = Math.min((mouthDist - 0.02) * 15, 1.0); 
+                    dynamicGInt = Math.min(baseGInt + mouthFactor, 1.0);
+                }
+            }
+
+            if (glitchMode === 1) glitchLayer.style.opacity = dynamicGInt;
+
+            if (isLiquid) {
+                liquidPhase += (isInteracting || mouthDist > 0.035) ? 0.15 : 0.04;
+                turbulence.setAttribute('baseFrequency', 0.015 + Math.sin(liquidPhase) * 0.005);
+            }
+
+            // 1. RENDERIZADO EN BUFFER
+            bufferCtx.save();
+            bufferCtx.clearRect(0, 0, w, h);
+
+            const hSlider = document.getElementById('hueSlider').value;
+            const sSlider = document.getElementById('satSlider').value;
+            const bSlider = document.getElementById('brightSlider').value;
+            const cSlider = document.getElementById('contSlider').value;
+            
+            let filterString = `hue-rotate(${hSlider}deg) saturate(${sSlider}%) brightness(${bSlider}%) contrast(${cSlider}%)`;
+            if (isInverted) filterString += ' invert(100%)';
+            bufferCtx.filter = filterString;
+
+            bufferCtx.drawImage(results.image, 0, 0, w, h);
+            bufferCtx.filter = 'none'; 
+            
+            // Dibujar Mallas Opcionales
+            if (results.poseLandmarks && togglePose.checked) {
+                drawConnectors(bufferCtx, results.poseLandmarks, POSE_CONNECTIONS, {color: 'rgba(136, 136, 136, 0.4)', lineWidth: 2});
+            }
+
+            if (results.faceLandmarks) {
+                if (document.getElementById('toggleFace').checked) {
+                    drawConnectors(bufferCtx, results.faceLandmarks, FACEMESH_TESSELATION, {color: 'rgba(50, 82, 123, 0.2)', lineWidth: 1});
+                    drawConnectors(bufferCtx, results.faceLandmarks, FACEMESH_LIPS, {color: '#B87333', lineWidth: 2});
+                }
+                drawNeonEyes(bufferCtx, results.faceLandmarks, w, h);
+
+                // Disparo de Lásers Oculares al abrir la boca dramáticamente
+                if (mouthDist > 0.055) {
+                    isInteracting = true;
+                    drawLasers(bufferCtx, results.faceLandmarks, w, h);
+                }
+
+                // Emisión de Lluvia 3D
+                if (Math.random() > 0.95) { 
+                    const mx = Math.random(); 
+                    const my = -0.1; 
+                    glbParticles.push(new GlbParticle(mx, my));
+                }
+            }
+
+            drawSpatialInterfaces(bufferCtx, w, h, btnColorShift, btnGravity);
+
+            let globalPinches = [];
+
+            const handsData = [
+                { marks: results.leftHandLandmarks, asset: ASSETS.gear },
+                { marks: results.rightHandLandmarks, asset: ASSETS.lightning }
+            ];
+
+            handsData.forEach(handData => {
+                if (handData.marks) {
+                    if (document.getElementById('toggleHands').checked) {
+                        drawConnectors(bufferCtx, handData.marks, HAND_CONNECTIONS, {color: 'rgba(253, 204, 13, 0.4)', lineWidth: 2});
+                        drawLandmarks(bufferCtx, handData.marks, {color: '#B87333', lineWidth: 1, radius: 2});
+                    }
+                    
+                    const indexZ = handData.marks[8].z;
+                    if (indexZ < -0.1) zPushForce = Math.max(zPushForce, Math.abs(indexZ) * 0.5);
+
+                    const pinches = detectPinches(handData.marks, w, h, handData.asset);
+                    if(pinches.length > 0) {
+                        isInteracting = true;
+                        pinches.forEach(p => {
+                            globalPinches.push(p);
+
+                            // Interfaz Espacial
+                            const d1 = Math.hypot(p.x - btnColorShift.x, p.y - btnColorShift.y);
+                            const d2 = Math.hypot(p.x - btnGravity.x, p.y - btnGravity.y);
+                            
+                            if (d1 < btnColorShift.radius) {
+                                btnColorShift.active = true;
+                                document.getElementById('hueSlider').value = (parseInt(document.getElementById('hueSlider').value) + 5) % 360;
+                                document.getElementById('hueVal').innerText = document.getElementById('hueSlider').value + '°';
+                                drawSpatialInterfaces(bufferCtx, w, h, btnColorShift, btnGravity);
+                            }
+                            
+                            if (d2 < btnGravity.radius) {
+                                btnGravity.active = true;
+                                isGravityReversed = true;
+                                drawSpatialInterfaces(bufferCtx, w, h, btnColorShift, btnGravity);
+                            }
+
+                            const emitCount = p.isThumb ? 1 : 2;
+                            for(let i=0; i<emitCount; i++) particles.push(new Particle2D(p.x, p.y, p.color, p.asset));
+                        });
+                    }
+                }
+            });
+
+            // FÍSICAS Y GAMIFICACIÓN: Comprobar colisiones 3D
+            for (let i = glbParticles.length - 1; i >= 0; i--) {
+                let p3d = glbParticles[i];
+                p3d.update(isGravityReversed, zPushForce);
+                
+                let screenPos = p3d.getScreenPosition(camera, w, h);
+                let caught = false;
+                let bounced = false;
+
+                if (screenPos) {
+                    // Colisiones del Cuerpo (Rebote Físico)
+                    if (p3d.vy < 0) { // Solo si están cayendo
+                        for (let bc of bodyColliders) {
+                            if (Math.hypot(screenPos.x - bc.x, screenPos.y - bc.y) < bc.radius) {
+                                // Rebote hacia arriba (Inversión de gravedad)
+                                p3d.vy = Math.abs(p3d.vy) * 1.5; 
+                                p3d.vx = (Math.random() - 0.5) * 1.5; // Desvío lateral
+                                bounced = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    // Colisión Boca (Captura)
+                    if (!bounced && mouthLoc && Math.hypot(screenPos.x - mouthLoc.x, screenPos.y - mouthLoc.y) < 90) {
+                        caught = true;
+                    }
+                    // Colisión Manos Pellizcos (Captura)
+                    if (!bounced && !caught) {
+                        for (let pinch of globalPinches) {
+                            if (Math.hypot(screenPos.x - pinch.x, screenPos.y - pinch.y) < 70) {
+                                caught = true; break;
+                            }
+                        }
+                    }
+                }
+
+                if (bounced) {
+                    // Chispas de rebote físico
+                    for(let j=0; j<3; j++) particles.push(new Particle2D(screenPos.x, screenPos.y, '#B87333', null, true));
+                }
+
+                if (caught) {
+                    gameScore += 100;
+                    scoreDisplay.innerText = `SCORE: ${gameScore}`;
+                    floatingTexts.push(new FloatingText("+100", screenPos.x, screenPos.y));
+                    for(let j=0; j<6; j++) particles.push(new Particle2D(screenPos.x, screenPos.y, '#FDCC0D', null, true));
+                    p3d.destroy();
+                    glbParticles.splice(i, 1);
+                    continue;
+                }
+
+                if (p3d.life <= 0) {
+                    p3d.destroy();
+                    glbParticles.splice(i, 1);
+                }
+            }
+
+            renderer.render(scene, camera);
+            bufferCtx.drawImage(webglCanvas, 0, 0, w, h);
+
+            for (let i = particles.length - 1; i >= 0; i--) {
+                particles[i].update();
+                particles[i].draw(bufferCtx);
+                if (particles[i].life <= 0) particles.splice(i, 1);
+            }
+
+            for (let i = floatingTexts.length - 1; i >= 0; i--) {
+                floatingTexts[i].update();
+                floatingTexts[i].draw(bufferCtx);
+                if (floatingTexts[i].life <= 0) floatingTexts.splice(i, 1);
+            }
+
+            bufferCtx.restore();
+
+            // 2. APLICAR GLITCH GLOBAL AL CANVAS FINAL
+            canvasCtx.clearRect(0, 0, w, h);
+            
+            if (glitchMode === 2) {
+                const offset = 60 * dynamicGInt;
+                canvasCtx.globalCompositeOperation = 'screen';
+                canvasCtx.fillStyle = 'rgba(255, 0, 0, 0.8)';
+                canvasCtx.fillRect(0,0,w,h);
+                canvasCtx.globalCompositeOperation = 'multiply';
+                canvasCtx.drawImage(bufferCanvas, (Math.random()-0.5)*offset, 0, w, h);
+                canvasCtx.globalCompositeOperation = 'screen';
+                canvasCtx.drawImage(bufferCanvas, -(Math.random()-0.5)*offset, 0, w, h);
+                canvasCtx.globalCompositeOperation = 'source-over';
+            } else if (glitchMode === 3) {
+                canvasCtx.drawImage(bufferCanvas, 0, 0, w, h);
+                const maxSlices = Math.floor(30 * dynamicGInt);
+                const sliceOffset = 500 * dynamicGInt;
+                for(let i=0; i<maxSlices; i++) {
+                    let sliceY = Math.random() * h;
+                    let sliceH = Math.random() * 150 + 20;
+                    let offsetX = (Math.random() - 0.5) * sliceOffset;
+                    canvasCtx.drawImage(bufferCanvas, 0, sliceY, w, sliceH, offsetX, sliceY, w, sliceH);
+                }
+            } else {
+                canvasCtx.drawImage(bufferCanvas, 0, 0, w, h);
+            }
+
+            if(isInteracting || isGravityReversed || zPushForce > 0) {
+                interactIndicator.classList.replace('bg-red-500', 'bg-[#FDCC0D]');
+                interactIndicator.classList.replace('shadow-[0_0_8px_red]', 'shadow-[0_0_12px_#FDCC0D]');
+            } else {
+                interactIndicator.classList.replace('bg-[#FDCC0D]', 'bg-red-500');
+                interactIndicator.classList.replace('shadow-[0_0_12px_#FDCC0D]', 'shadow-[0_0_8px_red]');
+            }
+        });
+
+        const cameraFeed = new Camera(videoElement, {
+            onFrame: async () => { await holistic.send({image: videoElement}); },
+            width: 1280, height: 720
+        });
+        
+        cameraFeed.start().catch(err => {
+            console.error("Error de cámara: ", err);
+            alert("Permite el acceso a la cámara para operar el SGX Tracker.");
+        });
+    </script>
+</body>
+</html>
