@@ -52,21 +52,6 @@
             object-fit: cover;
         }
 
-        /* Marcador de Puntuación (Gamificación) */
-        #scoreDisplay {
-            position: absolute;
-            top: 20px;
-            right: 30px;
-            font-size: 2.5rem;
-            font-weight: 900;
-            color: var(--sgx-yellow);
-            text-shadow: 0 0 15px var(--sgx-yellow), 0 0 30px rgba(253, 204, 13, 0.5);
-            z-index: 20;
-            font-family: 'Courier New', Courier, monospace;
-            letter-spacing: 2px;
-            transition: opacity 0.3s ease;
-        }
-
         /* Panel de Control UI Scrollable */
         .glass-panel {
             background: rgba(17, 17, 17, 0.75);
@@ -223,15 +208,15 @@
         <div class="flex flex-col gap-1.5">
             <label class="flex items-center justify-between cursor-pointer">
                 <span class="text-gray-200">Ver Malla Facial</span>
-                <input type="checkbox" id="toggleFace" checked class="w-3.5 h-3.5 accent-[#FDCC0D] hand-clickable">
+                <input type="checkbox" id="toggleFace" class="w-3.5 h-3.5 accent-[#FDCC0D] hand-clickable">
             </label>
             <label class="flex items-center justify-between cursor-pointer">
                 <span class="text-gray-200">Ver Líneas de Manos</span>
-                <input type="checkbox" id="toggleHands" checked class="w-3.5 h-3.5 accent-[#FDCC0D] hand-clickable">
+                <input type="checkbox" id="toggleHands" class="w-3.5 h-3.5 accent-[#FDCC0D] hand-clickable">
             </label>
             <label class="flex items-center justify-between cursor-pointer">
                 <span class="text-gray-200">Ver Malla Corporal</span>
-                <input type="checkbox" id="togglePose" checked class="w-3.5 h-3.5 accent-[#FDCC0D] hand-clickable">
+                <input type="checkbox" id="togglePose" class="w-3.5 h-3.5 accent-[#FDCC0D] hand-clickable">
             </label>
             <div class="flex justify-between items-center text-[#FDCC0D] font-bold mt-1 text-[10px] uppercase tracking-wide">
                 <span>Interacción Activa</span>
@@ -534,7 +519,7 @@
         let isGravityReversed = false;
         let isColorShiftActive = false;
         let hudActive = true; 
-        let isUiVisible = true;
+        let isUiVisible = true; // Controla solo el Panel Principal
 
         let handsJoinedTime = 0;
         let isUltimateActive = false;
@@ -552,27 +537,21 @@
         window.addEventListener('resize', resizeCanvas);
         resizeCanvas();
 
-        // Ocultamiento Global de UI
-        function toggleGlobalUI() {
+        // Ocultamiento exclusivo de la interfaz (Solo panel de control principal)
+        floatingMenuBtn.addEventListener('click', () => {
             isUiVisible = !isUiVisible;
             if (isUiVisible) {
                 controlPanel.classList.remove('ui-hidden');
-                floatingBtnsContainer.classList.remove('global-hidden');
-                restoreMenuBtn.classList.add('global-hidden');
-                huds.forEach(h => h.isActive = hudActive);
+                floatingMenuBtn.innerText = "Ocultar Menú";
+                floatingMenuBtn.style.backgroundColor = "transparent";
+                floatingMenuBtn.style.color = "#FDCC0D";
             } else {
                 controlPanel.classList.add('ui-hidden');
-                floatingBtnsContainer.classList.add('global-hidden');
-                restoreMenuBtn.classList.remove('global-hidden');
-                huds.forEach(h => {
-                    h.isActive = false;
-                    if(h.mesh) h.mesh.visible = false;
-                });
+                floatingMenuBtn.innerText = "Mostrar Menú";
+                floatingMenuBtn.style.backgroundColor = "rgba(50, 82, 123, 0.8)";
+                floatingMenuBtn.style.color = "#FFF";
             }
-        }
-
-        floatingMenuBtn.addEventListener('click', toggleGlobalUI);
-        restoreMenuBtn.addEventListener('click', toggleGlobalUI);
+        });
 
         forearmHudBtn.addEventListener('click', () => {
             hudActive = !hudActive;
@@ -583,7 +562,7 @@
             if (hudActive) {
                 hudButtonsContainer.classList.remove('opacity-0', 'scale-90', 'pointer-events-none');
                 hudButtonsContainer.classList.add('opacity-100', 'scale-100');
-                if (isUiVisible) huds.forEach(h => h.isActive = true);
+                huds.forEach(h => h.isActive = true);
             } else {
                 hudButtonsContainer.classList.add('opacity-0', 'scale-90', 'pointer-events-none');
                 hudButtonsContainer.classList.remove('opacity-100', 'scale-100');
@@ -749,6 +728,25 @@
                 ctx.beginPath(); ctx.arc(cx, cy, rightDist * h * 0.8, 0, 2*Math.PI); ctx.fill();
             }
             ctx.restore();
+
+            // Restaurar los Assets (Gear y Lightning) dinámicos en los ojos
+            ctx.save();
+            const threshold = 0.018; 
+            if (leftDist > threshold) { 
+                const cx = ((leftTop.x + leftBottom.x) / 2) * w;
+                const cy = ((leftTop.y + leftBottom.y) / 2) * h;
+                const size = (leftDist * h) * 6 + 15; 
+                const tintedGear = getTintedImage(ASSETS.gear, '#32527B'); 
+                ctx.drawImage(tintedGear, cx - size/2, cy - size/2, size, size);
+            }
+            if (rightDist > threshold) { 
+                const cx = ((rightTop.x + rightBottom.x) / 2) * w;
+                const cy = ((rightTop.y + rightBottom.y) / 2) * h;
+                const size = (rightDist * h) * 6 + 15; 
+                const tintedLight = getTintedImage(ASSETS.lightning, '#FDCC0D'); 
+                ctx.drawImage(tintedLight, cx - size/2, cy - size/2, size, size);
+            }
+            ctx.restore();
         }
 
         function drawLasers(ctx, faceLandmarks, w, h) {
@@ -827,13 +825,11 @@
             let activeLasers = []; 
             let zPushForce = 0;
 
-            if (isUiVisible) {
-                huds[0].updateValue(gameScore.toString());
-                let elapsed = Math.floor((Date.now() - gameStartTime) / 1000);
-                huds[1].updateValue(`${Math.floor(elapsed / 60).toString().padStart(2, '0')}:${(elapsed % 60).toString().padStart(2, '0')}`);
-                let d = new Date();
-                huds[2].updateValue(`${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}:${d.getSeconds().toString().padStart(2,'0')}`);
-            }
+            huds[0].updateValue(gameScore.toString());
+            let elapsed = Math.floor((Date.now() - gameStartTime) / 1000);
+            huds[1].updateValue(`${Math.floor(elapsed / 60).toString().padStart(2, '0')}:${(elapsed % 60).toString().padStart(2, '0')}`);
+            let d = new Date();
+            huds[2].updateValue(`${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}:${d.getSeconds().toString().padStart(2,'0')}`);
 
             if (isColorShiftActive) {
                 let hs = document.getElementById('hueSlider');
@@ -930,12 +926,12 @@
             bufferCtx.drawImage(results.image, 0, 0, w, h);
             bufferCtx.filter = 'none'; 
             
-            if (isUiVisible && results.poseLandmarks && document.getElementById('togglePose').checked) {
+            if (results.poseLandmarks && document.getElementById('togglePose').checked) {
                 drawConnectors(bufferCtx, results.poseLandmarks, POSE_CONNECTIONS, {color: 'rgba(136, 136, 136, 0.4)', lineWidth: 2});
             }
 
             if (results.faceLandmarks) {
-                if (isUiVisible && document.getElementById('toggleFace').checked) {
+                if (document.getElementById('toggleFace').checked) {
                     drawConnectors(bufferCtx, results.faceLandmarks, FACEMESH_TESSELATION, {color: 'rgba(50, 82, 123, 0.2)', lineWidth: 1});
                     drawConnectors(bufferCtx, results.faceLandmarks, FACEMESH_LIPS, {color: '#B87333', lineWidth: 2});
                 }
@@ -949,13 +945,11 @@
 
                 if (Math.random() > 0.95) glbParticles.push(new GlbParticle(Math.random(), -0.1));
 
-                if (isUiVisible) {
-                    huds.forEach(hud => {
-                        if(hud && typeof hud.update === 'function') {
-                            hud.update(results.faceLandmarks[4]);
-                        }
-                    });
-                }
+                huds.forEach(hud => {
+                    if(hud && typeof hud.update === 'function') {
+                        hud.update(results.faceLandmarks[4]);
+                    }
+                });
             } 
 
             let globalPinches = [];
@@ -966,7 +960,7 @@
 
             handsData.forEach(handData => {
                 if (handData.marks) {
-                    if (isUiVisible && document.getElementById('toggleHands').checked) {
+                    if (document.getElementById('toggleHands').checked) {
                         drawConnectors(bufferCtx, handData.marks, HAND_CONNECTIONS, {color: 'rgba(253, 204, 13, 0.4)', lineWidth: 2});
                         drawLandmarks(bufferCtx, handData.marks, {color: '#B87333', lineWidth: 1, radius: 2});
                     }
@@ -980,6 +974,7 @@
                         pinches.forEach(p => {
                             globalPinches.push(p);
 
+                            // Emisión reducida 50%
                             if (Math.random() > 0.5) {
                                 const emitCount = p.isThumb ? 1 : 2;
                                 for(let i=0; i<emitCount; i++) particles.push(new Particle2D(p.x, p.y, p.color, p.asset));
@@ -990,7 +985,7 @@
             });
 
             // Lógica de "Hacking" Botones UI Táctiles (Hand Clicks)
-            if (globalPinches.length > 0 && isUiVisible) {
+            if (globalPinches.length > 0) {
                 const clickables = document.querySelectorAll('.hand-clickable');
                 globalPinches.forEach(p => {
                     let screenX = w - p.x; // Invertir coordenada por efecto espejo
@@ -1055,7 +1050,7 @@
                 if (caught) {
                     const pointsGained = isLaserKill ? 200 : 100;
                     gameScore += pointsGained;
-                    if (isUiVisible) floatingTexts.push(new FloatingText(`+${pointsGained}${isLaserKill ? ' LASER!' : ''}`, screenPos.x, screenPos.y, isLaserKill ? '#FFFFFF' : '#FDCC0D'));
+                    floatingTexts.push(new FloatingText(`+${pointsGained}${isLaserKill ? ' LASER!' : ''}`, screenPos.x, screenPos.y, isLaserKill ? '#FFFFFF' : '#FDCC0D'));
                     
                     // Identidad de partículas al destruir modelo 3D
                     for(let j=0; j<3; j++) particles.push(new Particle2D(screenPos.x, screenPos.y, '#FDCC0D', ASSETS.lightning, true));
@@ -1067,25 +1062,23 @@
             }
 
             // Interacción HUD Holográficos
-            if (isUiVisible) {
-                huds.forEach(hud => {
-                    if (hud && typeof hud.getScreenPosition === 'function') {
-                        let hudPos = hud.getScreenPosition(camera, w, h);
-                        if (hudPos) {
-                            for (let pinch of globalPinches) {
-                                if (Math.hypot(hudPos.x - pinch.x, hudPos.y - pinch.y) < 60) {
-                                    let effectPos = hud.interact(); 
-                                    if (effectPos) {
-                                        // Partículas Lightnings al interactuar con menús
-                                        for(let j=0; j<4; j++) particles.push(new Particle2D(effectPos.x, effectPos.y, hud.color, ASSETS.lightning, true));
-                                    }
-                                    break;
+            huds.forEach(hud => {
+                if (hud && typeof hud.getScreenPosition === 'function') {
+                    let hudPos = hud.getScreenPosition(camera, w, h);
+                    if (hudPos) {
+                        for (let pinch of globalPinches) {
+                            if (Math.hypot(hudPos.x - pinch.x, hudPos.y - pinch.y) < 60) {
+                                let effectPos = hud.interact(); 
+                                if (effectPos) {
+                                    // Partículas Lightnings al interactuar con menús
+                                    for(let j=0; j<4; j++) particles.push(new Particle2D(effectPos.x, effectPos.y, hud.color, ASSETS.lightning, true));
                                 }
+                                break;
                             }
                         }
                     }
-                });
-            }
+                }
+            });
 
             renderer.render(scene, camera);
             bufferCtx.drawImage(webglCanvas, 0, 0, w, h);
@@ -1094,11 +1087,10 @@
                 particles[i].update(); particles[i].draw(bufferCtx);
                 if (particles[i].life <= 0) particles.splice(i, 1);
             }
-            if (isUiVisible) {
-                for (let i = floatingTexts.length - 1; i >= 0; i--) {
-                    floatingTexts[i].update(); floatingTexts[i].draw(bufferCtx);
-                    if (floatingTexts[i].life <= 0) floatingTexts.splice(i, 1);
-                }
+            
+            for (let i = floatingTexts.length - 1; i >= 0; i--) {
+                floatingTexts[i].update(); floatingTexts[i].draw(bufferCtx);
+                if (floatingTexts[i].life <= 0) floatingTexts.splice(i, 1);
             }
             bufferCtx.restore();
 
@@ -1129,14 +1121,12 @@
                 canvasCtx.drawImage(bufferCanvas, 0, 0, w, h);
             }
 
-            if (isUiVisible) {
-                if(isInteracting || isGravityReversed || zPushForce > 0 || isUltimateActive) {
-                    interactIndicator.classList.replace('bg-red-500', 'bg-[#FDCC0D]');
-                    interactIndicator.classList.replace('shadow-[0_0_8px_red]', 'shadow-[0_0_12px_#FDCC0D]');
-                } else {
-                    interactIndicator.classList.replace('bg-[#FDCC0D]', 'bg-red-500');
-                    interactIndicator.classList.replace('shadow-[0_0_12px_#FDCC0D]', 'shadow-[0_0_8px_red]');
-                }
+            if(isInteracting || isGravityReversed || zPushForce > 0 || isUltimateActive) {
+                interactIndicator.classList.replace('bg-red-500', 'bg-[#FDCC0D]');
+                interactIndicator.classList.replace('shadow-[0_0_8px_red]', 'shadow-[0_0_12px_#FDCC0D]');
+            } else {
+                interactIndicator.classList.replace('bg-[#FDCC0D]', 'bg-red-500');
+                interactIndicator.classList.replace('shadow-[0_0_12px_#FDCC0D]', 'shadow-[0_0_8px_red]');
             }
         });
 
